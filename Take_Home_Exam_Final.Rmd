@@ -1,0 +1,877 @@
+---
+title: "Take Home Exam: Geospatial Data Science"
+author: "Anastasiia Chernavskaia, Blanca Jimenez, Pablo Fernández, Nour Mohamed"
+date: "26/03/2025"
+output: 
+  prettydoc::html_pretty:
+    theme: hpstr
+    highlight: github
+    white-space: pre-wrap
+ 
+---
+
+```{r setup, warning=FALSE, message=FALSE, echo=FALSE}
+# Libraries
+library(sf)         
+library(tidyverse)
+library(spData)     
+library(readxl)   
+library(units)
+library(lubridate)
+library(tidyr)
+library(ggplot2)
+library(patchwork)
+library(plm) # panel data models for fixed effects estimation
+```
+
+# The Political Impact of Natural Disasters: Evaluating the Impact of Natural Shocks on Election Outcomes
+
+## $\color{darkblue}{\text{Motivation}}$
+Our project investigates how natural disasters influence voting behavior in Spain, focusing on Catalunya and Comunitat Valenciana. Specifically, we examine whether exposure to wildfires, an increasingly frequent natural shock, affects political preferences, turnout, and support for incumbent governments.
+
+Recent studies suggest that voters affected by disasters may punish the incumbent government if the response is inadequate. Others find that such events can increase support for conservative parties, particularly when linked to climate change skepticism. Our goal is to test these theories empirically using geospatial data on fire perimeters and granular election outcomes disaggregated at the sección censal level, the highest level of territorial granularity available in Spain. By leveraging spatial analysis techniques, we integrate fire perimeters with administrative boundaries to precisely measure the extent of fire exposure at the local level.
+
+By identifying treated areas as those where at least 20 percent of their territory was affected by fire within an election period and comparing them to unaffected areas, we aim to uncover whether natural shocks drive shifts in political engagement and party preferences.
+
+## $\color{darkblue}{\text{Research Question}}$
+The key questions focus on whether voters in affected areas shift their political preferences. 
+
+We examine whether:
+
+- exposure to wildfires leads to increased support for conservative parties, particularly in regions where climate change is already shaping economic and environmental concerns. 
+
+- affected voters are more likely to vote for parties outside the incumbent government.  
+
+- natural disasters increase voter turnout, as previous research suggests that crisis events can mobilize the electorate.
+
+## $\color{darkblue}{\text{Data}}$
+
+To analyze the relationship between natural disasters and electoral outcomes, we rely on three primary sources of data.  
+
+*1. Election data*
+   We use detailed electoral outcomes fromCatalunya, and the Comunitat Valenciana, covering general (national), regional, and municipal elections. This data is disaggregated at the sección censal level, the smallest territorial subdivision available, which allows for a precise examination of political shifts within affected areas. Data sources include:  
+   - Spain: General elections and local elections from the Spanish Ministry of the Interior. These records require cleaning and aggregation, as results are reported at the mesa level, meaning multiple tables exist within each sección censal. 
+   - Catalunya: Electoral data is structured in a more accessible format, available in clean CSV files with key variables such as turnout and vote shares.  
+   - Comunitat Valenciana: Regional and general election results from 1987 to 2023, available in structured datasets that can be merged with geospatial data.  
+
+*2. Geospatial data on administrative boundaries*
+   We incorporate polygon shapefiles defining all secciones censales in Spain from 2001 to 2024. Since the number and shape of secciones have changed over time, we ensure that we match each election to the correct territorial boundaries. This allows us to merge election data with fire perimeters to define treated and control areas.  
+
+*3. Geospatial data on wildfires*
+   Our main treatment variable is derived from georeferenced fire perimeter data, available as polygon and multipolygon vector files.  
+   - Catalunya: Annual fire perimeter shapefiles from 1986 to 2023, mapped using satellite imagery.  
+   - Comunitat Valenciana: A consolidated dataset covering 1993 to 2022, sourced from GPS records and satellite images. However, it is noted that not all fires are mapped, which may introduce selection bias.  
+
+The limiting factor in our dataset is the availability of census section polygons only from 2001 onward, meaning our analysis is restricted to elections held within this period. 
+
+## $\color{darkblue}{\text{Visualizations}}$
+### Visualizing Wildfires and Electoral Boundaries  
+
+To better understand the spatial distribution of wildfires and their overlap with electoral districts, we use geospatial visualizations that map fire perimeters onto municipal and census section boundaries. The figure below illustrates the affected areas in the Comunitat Valenciana, with fire perimeters in red overlaid on administrative divisions.  
+
+These visualizations help identify treated areas where a significant portion of a district has been burned. By combining this with electoral data, we can assess whether exposure to wildfires influences voting behavior. 
+
+```{r data, warning=FALSE, message=FALSE, echo=FALSE}
+##########
+# Load datasets: 
+# Valencia Fires: 
+fires_v <- st_read("ince_incendios0.shp",  quiet = TRUE)
+# Catalunya Fires: 
+fires_c <- st_read("fires_combined_clean.shp",  quiet = TRUE)
+# Espana secciones censales 2023:
+secciones_v <- st_read("SECC_CE_20230101.shp",  quiet = TRUE)
+secciones_c <- st_read("SECC_CE_20230101.shp",  quiet = TRUE)
+
+##########
+# Data cleaning: 
+# Valencia:
+fires_v <- fires_v %>%
+  rename(
+    municipality = nom_mun,  # Municipality name
+    year = anyo,             # Year of fire occurrence
+    fire_detec   = f_detec,      # Fire detection date
+    )%>%
+  select(municipality, year, Shape_Area, Shape_Leng, fire_detec,
+         detecp_txt, g_caus_txt, muertos,heridos)
+# Fire detect extract months 
+fires_v$fire_detec <- as.Date(fires_v$fire_detec, format = "%d/%m/%Y")
+fires_v$month <- month(fires_v$fire_detec)
+fires_v$month_name <- month(fires_v$fire_detec, label = TRUE)
+```
+
+```{r visuals1, warning=FALSE, message=FALSE}
+# Valencia 
+# Ensure same crs as secciones data: 
+secciones_v <- st_transform(secciones_v, st_crs(fires_v))
+# Create bounding box:
+bbox_v <- st_bbox(fires_v)
+bbox_polygon_v <- st_as_sfc(bbox_v)
+
+# Plot:
+ggplot() +
+  geom_sf(data = secciones_v, fill = "grey95", color = "grey60", size = 0.1) +
+  geom_sf(data = fires_v, fill = "red", color = NA) +
+  coord_sf(
+    xlim = c(bbox_v["xmin"], bbox_v["xmax"]),
+    ylim = c(bbox_v["ymin"], bbox_v["ymax"]),
+    expand = FALSE
+  ) +
+  labs(title = "Fires in Comunitat Valenciana (1993–2022)") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
+  )
+```
+
+Figure 1: Fire perimeters overlaid on administrative boundaries for Comunitat Valenciana 
+
+```{r visuals2, warning=FALSE, message=FALSE}
+# Catalynua :
+# Ensure same crs as secciones data: 
+secciones_c <- st_transform(secciones_c, st_crs(fires_c))
+# Create bounding box:
+bbox_c <- st_bbox(fires_c)
+bbox_polygon_c <- st_as_sfc(bbox_c)
+
+# Plot:
+ggplot() +
+  geom_sf(data = secciones_c, fill = "grey95", color = "grey60", size = 0.1) +
+  geom_sf(data = fires_c, fill = "red", color = NA) +
+  coord_sf(
+    xlim = c(bbox_c["xmin"], bbox_c["xmax"]),
+    ylim = c(bbox_c["ymin"], bbox_c["ymax"]),
+    expand = FALSE
+  ) +
+  labs(title = "Fires in Catalunya (2001–2023)") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
+  )
+```
+
+Figure 2: Fire perimeters overlaid on administrative boundaries for Catalunya 
+
+The plots show the geographic distribution of wildfire activity in the Comunitat Valenciana (1993–2022) and Catalunya (2001–2023), with fire perimeters overlaid on municipal boundaries. We can see that Comunitat Valenciana experienced a lot more fires given the data we have. In both regions, fires are not evenly distributed but tend to cluster in specific inland and forested areas, while coastal and urban zones appear less affected. This spatial variation is important for our analysis, as it allows us to compare electoral outcomes in treated areas, those directly affected by fire, with nearby control areas that experienced no exposure. The maps provide an initial sense of the extent and location of treatment across space and time.
+
+## $\color{darkblue}{\text{Analysis & Results}}$
+
+## Empirical Methodology and Identification Strategy:
+
+We follow closely the structure used in Masiero and Santarossa (2021), who analyze the political effects of earthquakes in Italy using a similar identification strategy. In their study, they compare municipalities affected by seismic events to those not affected, exploiting variation in exposure across time and space while controlling for municipality and time fixed effects. They show that voters in affected areas tend to reward the incumbent, especially when the government responds quickly and effectively. Their empirical approach provides a useful template for assessing the impact of natural shocks on electoral behavior in a different context.
+
+Following this, to estimate the effect of wildfires on electoral outcomes, we adopt a two-way fixed effects strategy with, election (time) and sección censal fixed effects. Our identification strategy relies on the assumption that fire occurrence is exogenous with respect to political preferences, and that treated and control areas would have followed similar electoral trends in the absence of fire exposure. 
+
+More concretely, we have tried with the following regression specifications:
+- 4 treatment variables: 3 dummy variables equal to one for secciones censales where the fire exposure was at least 20%, 10% *or* 5% in the period prior to an election, and zero otherwise; and another treatment variable which is just equal to the area affected by a fire within a *sección censal*.
+- 5 dependent variables: the turnout rate (computed as the number of valid votes per *sección* over the total number of people with the right to vote in that area), the blank ballot rate (the proportion of blank ballots over the total of valid votes), the share of votes towards the incumbent party in the Spanish government, an ideological index for each district and election that ranges from -3 (extreme left) to 3 (far right) and a nationalist index for each district and election, which goes from 0 (no votes towards nationalist parties) to 1 (all votes in a certain *sección* and election towards nationalist parties).
+- 3 different panels: Catalunya, Comunitat Valenciana and the combined panel.
+
+We estimate the following baseline equation:
+
+$$
+Y_{it} = \alpha_i + \gamma_t + \beta \cdot \text{Fire}_{it} + \varepsilon_{it}
+$$
+
+where $Y_{it}$ denotes the electoral outcome of interest (such as vote share for incumbent parties, turnout, or a left-right index) in sección $i$ at election $t$. The variable $\text{Fire}_{it}$ is a dummy equal to 1 if sección $i$ experienced (significant) fire exposure between elections. $\alpha_i$ are sección fixed effects, and $\gamma_t$ are election year fixed effects.
+
+By including sección fixed effects, we account for time-invariant unobserved characteristics of each unit, such as long-term political leanings or geographic exposure to climate shocks. Year fixed effects absorb common shocks across all areas, such as national political trends or macroeconomic fluctuations. In extended models, we could also explore specifications that control for pre-treatment turnout or socio-demographic characteristics where data allows.
+
+We estimate the previous regression through the within-estimator, which makes the causal effect $\beta$ identified only for those *secciones* which have been (significantly) affected by a fire at some point in time in the period of Spanish general elections considered. Therefore, as exposed in Masiero and Santarossa (2021), in this scenario $\beta$ captures the average treatment effect on the treated (those districts affected by fires.)
+
+# Results:
+
+## 1. Importing and preprocessing the data for creating a panel
+
+### Catalunya
+
+```{r importing Catalunya data, warning=FALSE, message=FALSE}
+# Read the general election results csv: 1st row as character, 
+# the rest with the default type
+cat_pol_outcomes <- read.csv("cat_general_preprocessed.csv", 
+                colClasses = c("character", rep(NA, ncol(read.csv("cat_general_preprocessed.csv", nrows = 1)) - 1)))
+
+# Rename column for consistency with Comunitat Valenciana data
+cat_pol_outcomes <- cat_pol_outcomes %>% 
+  rename(nationalist_index_agg = catalanist_index_agg)
+
+# Load the shapefile which combines the fire data with the secciones censales
+secciones_cat_fires <- st_read("cat_fires_percent_dummy.shp") # nolint: line_length_linter.
+
+# Remove the leading "X" from column names
+names(secciones_cat_fires) <- sub("^X", "", names(secciones_cat_fires)) # nolint: line_length_linter.
+
+# Replace dots with hyphens in column names
+names(secciones_cat_fires) <- gsub("\\.", "-", names(secciones_cat_fires)) # nolint: line_length_linter.
+
+# Append 'dummy' to column names ending with '_'
+names(secciones_cat_fires) <- gsub("(_)$", "\\1dummy", names(secciones_cat_fires)) # nolint: line_length_linter.
+
+# Merge the % of the area affected by fires with the election results
+
+# Identify the columns you want to merge (time period columns)
+election_periods <- grep("^\\d{4}-\\d{4}$", names(secciones_cat_fires), value = TRUE)
+
+# Select only the CUSEC column, the time period columns and the geometries
+select_secciones_cat <- secciones_cat_fires[, c("CUSEC", election_periods)]
+
+# Merge the data frames, keeping all rows from the original 'cat' data frame
+cat_merged <- merge(cat_pol_outcomes, select_secciones_cat, by = "CUSEC", all.x = TRUE)
+
+# Now, in the merged data frame we reduce the fire columns area to a single one,
+# since each row in that data frame denotes a CUSEC, an election year and an 
+# election number
+
+# Pivot to long format
+df_long_cat <- cat_merged %>%
+  pivot_longer(
+    cols = all_of(election_periods),
+    names_to = "period",
+    values_to = "fires_value"
+  ) %>%
+  # Extract start and end year from the period column name
+  mutate(
+    start_year = as.numeric(sub("-.*", "", period)),
+    end_year = as.numeric(sub(".*-", "", period)),
+    # Mark the type of period: 2 if single year (start equals end), 1 otherwise
+    period_type = if_else(start_year == end_year, 2L, 1L)
+  ) %>%
+  # Keep only the period whose end year matches year_election and type matches election_number
+  filter(end_year == year_election, period_type == election_number)
+
+# Now, join back the selected value. Here we assume one match per row.
+cat_final <- cat_merged %>%
+  left_join(df_long_cat %>% 
+              select(CUSEC, year_election, election_number, fires_affected_area = fires_value),
+            by = c("CUSEC", "year_election", "election_number"))
+
+# Verification: Check if the fires_affected_area matches the expected value (
+# in "FALSE columns", it means that some operations were done incorrectly)
+cat_final <- cat_final %>%
+  left_join(df_long_cat %>% 
+              select(CUSEC, year_election, election_number, expected_fires_affected_area = fires_value),
+            by = c("CUSEC", "year_election", "election_number")) %>%
+  mutate(verification = fires_affected_area == expected_fires_affected_area)
+
+# Remove period columns
+cat_final <- cat_final %>%
+  select(-all_of(election_periods))
+
+# View rows where verification failed
+cat_final %>% filter(!verification)
+
+# All of the operations have been done correctly (no row with failed operations),
+# so we can remove the verification columns
+cat_final <- cat_final %>%
+  select(-all_of(c("verification", "expected_fires_affected_area")))
+
+# Remove data frames which are not necessary anymore
+rm(cat_merged, cat_pol_outcomes, df_long_cat, secciones_cat_fires, select_secciones_cat) # nolint: line_length_linter.
+
+# We create dummy variablles for different thresholds of fires_affected_area
+# (20%, 10% and 5%)
+cat_final <- cat_final %>%
+  mutate(
+    fire_20 = ifelse(fires_affected_area >= 20, 1, 0),
+    fire_10 = ifelse(fires_affected_area >= 10, 1, 0),
+    fire_5  = ifelse(fires_affected_area >= 5, 1, 0)
+  )
+
+# Convert data frame again to simple feature
+cat_final <- st_as_sf(cat_final)
+
+summary(cat_final)
+```
+
+Check the number of fires per year: this gives a first sight on the number of districts for which we will be able to identify the causal effect (note that the larger the threshold, the lower the number of potentially identified districts; the tradeoff is, however, that the effect is expected to be eventually negligible the lower the area affected by a fire).
+
+```{r check of identified districts for Catalunya, warning=FALSE, message=FALSE}
+# Create summary of 1s in fire dummy columns, grouped by election year and number
+fire_summary_grouped_cat <- cat_final %>%
+  group_by(year_election, election_number) %>%
+  summarise(
+    fire_20_count = sum(fire_20, na.rm = TRUE),
+    fire_10_count = sum(fire_10, na.rm = TRUE),
+    fire_5_count = sum(fire_5, na.rm = TRUE),
+    total_observations = n(),
+    fire_20_percentage = round(sum(fire_20, na.rm = TRUE) / n() * 100, 2),
+    fire_10_percentage = round(sum(fire_10, na.rm = TRUE) / n() * 100, 2),
+    fire_5_percentage = round(sum(fire_5, na.rm = TRUE) / n() * 100, 2)
+  ) %>%
+  ungroup() %>%
+  arrange(year_election, election_number)
+
+# Print the summary
+print(fire_summary_grouped_cat)
+```
+
+![](cat_fires_colored.png)
+For example, the image above shows the districts (in blue) that are affected by fires (in red) in the election period 2011-2015 at 20% threshold.
+
+### Comunitat Valenciana
+
+```{r importing Comunitat Valenciana data, warning=FALSE, message=FALSE}
+# Read the general election results csv: 1st row as character, 
+# the rest with the default type
+cv_pol_outcomes <- read.csv("valencia_reordered.csv", 
+                colClasses = c("character", rep(NA, ncol(read.csv("valencia_reordered.csv", nrows = 1)) - 1)))
+
+head(cv_pol_outcomes)
+
+# Load the shapefile which combines the fire data with the secciones censales
+secciones_cv_fires <- st_read("v_fires_percent_dummy.shp") # nolint: line_length_linter.
+
+# Remove the leading "X" from column names
+names(secciones_cv_fires) <- sub("^X", "", names(secciones_cv_fires)) # nolint: line_length_linter.
+
+# Replace dots with hyphens in column names
+names(secciones_cv_fires) <- gsub("\\.", "-", names(secciones_cv_fires)) # nolint: line_length_linter.
+
+# Append 'dummy' to column names ending with '_'
+names(secciones_cv_fires) <- gsub("(_)$", "\\1dummy", names(secciones_cv_fires)) # nolint: line_length_linter.
+
+# Merge the % of the area affected by fires with the election results
+
+# Identify the columns you want to merge (time period columns)
+election_periods <- grep("^\\d{4}-\\d{4}$", names(secciones_cv_fires), value = TRUE)
+
+# Select only the CUSEC column, the time period columns and the geometries
+select_secciones_cv <- secciones_cv_fires[, c("CUSEC", election_periods)]
+
+# Merge the data frames, keeping all rows from the original political outcomes 
+# data frame
+cv_merged <- merge(cv_pol_outcomes, select_secciones_cv, by = "CUSEC", all.x = TRUE)
+
+# Now, in the merged data frame we reduce the fire columns area to a single one,
+# since each row in that data frame denotes a CUSEC, an election year and an 
+# election number
+
+# Pivot to long format
+df_long_cv <- cv_merged %>%
+  pivot_longer(
+    cols = all_of(election_periods),
+    names_to = "period",
+    values_to = "fires_value"
+  ) %>%
+  # Extract start and end year from the period column name
+  mutate(
+    start_year = as.numeric(sub("-.*", "", period)),
+    end_year = as.numeric(sub(".*-", "", period)),
+    # Mark the type of period: 2 if single year (start equals end), 1 otherwise
+    period_type = if_else(start_year == end_year, 2L, 1L)
+  ) %>%
+  # Keep only the period whose end year matches year_election and type matches election_number
+  filter(end_year == year_election, period_type == election_number)
+
+# Now, join back the selected value. Here we assume one match per row.
+cv_final <- cv_merged %>%
+  left_join(df_long_cv %>% 
+              select(CUSEC, year_election, election_number, fires_affected_area = fires_value),
+            by = c("CUSEC", "year_election", "election_number"))
+
+# Verification: Check if the fires_affected_area matches the expected value (
+# in "FALSE columns", it means that some operations were done incorrectly)
+cv_final <- cv_final %>%
+  left_join(df_long_cv %>% 
+              select(CUSEC, year_election, election_number, expected_fires_affected_area = fires_value),
+            by = c("CUSEC", "year_election", "election_number")) %>%
+  mutate(verification = fires_affected_area == expected_fires_affected_area)
+
+# Remove period columns
+cv_final <- cv_final %>%
+  select(-all_of(election_periods))
+
+# View rows where verification failed
+cv_final %>% filter(!verification)
+
+# All of the operations have been done correctly (no row with failed operations),
+# so we can remove the verification columns
+cv_final <- cv_final %>%
+  select(-all_of(c("verification", "expected_fires_affected_area")))
+
+# Remove data frames which are not necessary anymore
+rm(cv_merged, cv_pol_outcomes, df_long_cv, secciones_cv_fires, select_secciones_cv) # nolint: line_length_linter.
+
+# We create dummy variablles for different thresholds of fires_affected_area
+# (20%, 10% and 5%)
+cv_final <- cv_final %>%
+  mutate(
+    fire_20 = ifelse(fires_affected_area >= 20, 1, 0),
+    fire_10 = ifelse(fires_affected_area >= 10, 1, 0),
+    fire_5  = ifelse(fires_affected_area >= 5, 1, 0)
+  )
+
+# Convert data frame again to simple feature
+cv_final <- st_as_sf(cv_final)
+
+summary(cv_final)
+```
+
+```{r check of identified districts for Comunitat Valenciana, warning=FALSE, message=FALSE}
+# Create summary of 1s in fire dummy columns, grouped by election year and number
+fire_summary_grouped_cv <- cv_final %>%
+  group_by(year_election, election_number) %>%
+  summarise(
+    fire_20_count = sum(fire_20, na.rm = TRUE),
+    fire_10_count = sum(fire_10, na.rm = TRUE),
+    fire_5_count = sum(fire_5, na.rm = TRUE),
+    total_observations = n(),
+    fire_20_percentage = round(sum(fire_20, na.rm = TRUE) / n() * 100, 2),
+    fire_10_percentage = round(sum(fire_10, na.rm = TRUE) / n() * 100, 2),
+    fire_5_percentage = round(sum(fire_5, na.rm = TRUE) / n() * 100, 2)
+  ) %>%
+  ungroup() %>%
+  arrange(year_election, election_number)
+
+# Print the summary
+print(fire_summary_grouped_cv)
+```
+
+Note that there is no data for the 1st election of 2019, nor for the 2023 election (as the fires data is limited to 2022).
+
+### Combined dataset (simple feature)
+
+Below, we simply concatenate the Catalunya and Comunitat Valenciana observations to extend the panel and have more observations in order to estimate the treatment effects more precisely. The concatenated data frames are the preprocessed (above) simple features for each region.
+
+```{r concatenating regional data, warning=FALSE, message=FALSE}
+sf_combined <- bind_rows(cat_final, cv_final)
+summary(sf_combined)
+```
+
+## 2. Estimating the two-way fixed effects model
+
+In this section, we estimate the two-way fixed effects regression:
+
+$$
+Y_{it} = \alpha_i + \gamma_t + \beta \cdot \text{Fire}_{it} + \varepsilon_{it}
+$$
+
+by considering the following specifications:
+- 4 treatment variables: 3 dummy variables equal to one for secciones censales where the fire exposure was at least 20%, 10% *or* 5% in the period prior to an election, and zero otherwise; and another treatment variable which is just equal to the area affected by a fire within a *sección censal*.
+- 5 dependent variables: the turnout rate (computed as the number of valid votes per *sección* over the total number of people with the right to vote in that area), the blank ballot rate (the proportion of blank ballots over the total of valid votes), the share of votes towards the incumbent party in the Spanish government, an ideological index for each district and election that ranges from -3 (extreme left) to 3 (far right) and a nationalist index for each district and election, which goes from 0 (no votes towards nationalist parties) to 1 (all votes in a certain *sección* and election towards nationalist parties).
+- 3 different panels: Catalunya, Comunitat Valenciana and the combined panel.
+
+More concretely, for Catalunya and the Comunitat Valenciana we run the regression for all of the 5 dependent variables but only considering one treatment variable (the fire exposure area, which has the most granularity possible). For the combined dataset, on the other hand, we consider all treatment variables.
+
+Note that the `plm` package and function used below handles the unbalancedness of the data (see https://cran.r-project.org/web/packages/plm/plm.pdf).
+
+### Catalunya
+
+```{r TWFE Catalunya, warning = FALSE, message = FALSE}
+# First, we create a unique identifier for each election: 
+# the election year and the election number
+cat_final <- cat_final %>%
+  mutate(election_id = paste0(year_election, "_", election_number))
+
+# Convert the data frame to a panel data frame
+# Specify 'CUSEC' as the individual identifier and 'election_id' as the time identifier
+cat_panel <- pdata.frame(cat_final, index = c("CUSEC", "election_id"))
+
+# We save the names of the different political outcomes in a vector
+dependent_vars <- c("turnout_rate", "blank_ballot_rate",
+  "incumbent_vote_proportion", "political_index_agg",
+  "nationalist_index_agg")
+
+# Initialize a list to store the models
+model_list_cat <- list()
+
+# Loop over each dependent variable
+for (dv in dependent_vars) {
+  # Define the formula dynamically
+  formula <- as.formula(paste(dv, "~ fires_affected_area"))
+  
+  # Fit the fixed effects model
+  model <- plm(formula, data = cat_panel, model = "within", effect = "twoways")
+  
+  # Store the model in the list
+  model_list_cat[[dv]] <- model
+}
+
+# Initialize a list to store the robust summaries
+robust_summaries_cat <- list()
+
+for (dv in dependent_vars) {
+  model <- model_list_cat[[dv]]
+  
+  # Obtain the robust summary, with heteroskedasticity-robust and clustered 
+  # standard errors at the CUSEC level
+  robust_summary <- summary(model, vcov = 
+    function(x) vcovHC(x, method = "arellano", type = "HC1", cluster = "group"))
+  
+  # Store the robust summary in the list
+  robust_summaries_cat[[dv]] <- robust_summary
+}
+
+# Print a sample robust summary for the first dependent variable
+for (dv in dependent_vars[1]) {
+  cat("====================", "\n # Long Summary for Dependent Variable:", dv, "\n==================== \n")
+  print(robust_summaries_cat[[dv]])
+}
+
+for (dv in dependent_vars) {
+  cat("====================", "\n # Short Summary for Dependent Variable:", dv, "\n==================== \n")
+  print(robust_summaries_cat[[dv]][["coefficients"]])
+}
+```
+
+From the regression results for Catalunya, we can observe that none of the estimates is statistically significant.
+
+### Comunitat Valenciana
+
+```{r TWFE Comunitat Valenciana, warning = FALSE, message = FALSE}
+# First, we create a unique identifier for each election: 
+# the election year and the election number
+cv_final <- cv_final %>%
+  mutate(election_id = paste0(year_election, "_", election_number))
+
+# Convert the data frame to a panel data frame
+# Specify 'CUSEC' as the individual identifier and 'election_id' as the time identifier
+cv_panel <- pdata.frame(cv_final, index = c("CUSEC", "election_id"))
+
+# We save the names of the different political outcomes in a vector
+dependent_vars <- c("turnout_rate", "blank_ballot_rate",
+  "incumbent_vote_proportion", "political_index_agg",
+  "nationalist_index_agg")
+
+# Initialize a list to store the models
+model_list_cv <- list()
+
+# Loop over each dependent variable
+for (dv in dependent_vars) {
+  # Define the formula dynamically
+  formula <- as.formula(paste(dv, "~ fires_affected_area"))
+  
+  # Fit the fixed effects model
+  model <- plm(formula, data = cv_panel, model = "within", effect = "twoways")
+  
+  # Store the model in the list
+  model_list_cv[[dv]] <- model
+}
+
+# Initialize a list to store the robust summaries
+robust_summaries_cv <- list()
+
+for (dv in dependent_vars) {
+  model <- model_list_cv[[dv]]
+  
+  # Obtain the robust summary, with heteroskedasticity-robust and clustered 
+  # standard errors at the CUSEC level
+  robust_summary <- summary(model, vcov = 
+    function(x) vcovHC(x, method = "arellano", type = "HC1", cluster = "group"))
+  
+  # Store the robust summary in the list
+  robust_summaries_cv[[dv]] <- robust_summary
+}
+
+# Print an example of the long summary
+for (dv in dependent_vars[1]) {
+  cat("====================", "\n # Long Summary for Dependent Variable:", dv, "\n==================== \n")
+  print(robust_summaries_cv[[dv]])
+}
+
+for (dv in dependent_vars) {
+  cat("====================", "\n # Short Summary for Dependent Variable:", dv, "\n==================== \n")
+  print(robust_summaries_cv[[dv]][["coefficients"]])
+}
+```
+
+From the regression results for Catalunya, we can observe that only the treatment effect is statistically significant (at $\alpha = 10%$) when considering the nationalist vote share as the dependent variable. The point estimate, however, is extremely close to 0.
+
+### Combined dataset (simple feature)
+
+**A. Fires affected area as treatment variable**
+
+```{r TWFE combined dataset treatment variable A, warning = FALSE, message = FALSE}
+# First, we create a unique identifier for each election: 
+# the election year and the election number
+sf_combined <- sf_combined %>%
+  mutate(election_id = paste0(year_election, "_", election_number))
+
+# Convert the data frame to a panel data frame
+# Specify 'CUSEC' as the individual identifier and 'election_id' as the time identifier
+combined_panel <- pdata.frame(sf_combined, index = c("CUSEC", "election_id"))
+
+# We save the names of the different political outcomes in a vector
+dependent_vars <- c("turnout_rate", "blank_ballot_rate",
+  "incumbent_vote_proportion", "political_index_agg",
+  "nationalist_index_agg")
+
+# Initialize a list to store the models
+model_list_combined <- list()
+
+# Loop over each dependent variable
+for (dv in dependent_vars) {
+  # Define the formula dynamically
+  formula <- as.formula(paste(dv, "~ fires_affected_area"))
+  
+  # Fit the fixed effects model
+  model <- plm(formula, data = combined_panel, model = "within", effect = "twoways")
+  
+  # Store the model in the list
+  model_list_combined[[dv]] <- model
+}
+
+# Initialize a list to store the robust summaries
+robust_summaries_combined <- list()
+
+for (dv in dependent_vars) {
+  model <- model_list_combined[[dv]]
+  
+  # Obtain the robust summary, with heteroskedasticity-robust and clustered 
+  # standard errors at the CUSEC level
+  robust_summary <- summary(model, vcov = 
+    function(x) vcovHC(x, method = "arellano", type = "HC1", cluster = "group"))
+  
+  # Store the robust summary in the list
+  robust_summaries_combined[[dv]] <- robust_summary
+}
+
+# Print an example of a long summary
+for (dv in dependent_vars[1]) {
+  cat("====================", "\n # Long Summary for Dependent Variable:", dv, "\n==================== \n")
+  print(robust_summaries_combined[[dv]])
+}
+
+for (dv in dependent_vars) {
+  cat("====================", "\n # Short Summary for Dependent Variable:", dv, "\n==================== \n")
+  print(robust_summaries_combined[[dv]][["coefficients"]])
+}
+```
+
+Once we include both regions (Catalunya and Comunitat Valenciana) in the panel, there are two political outcomes for which the treatment effect (the area affected by a fire) becomes significant:
+1. The share of the votes towards the incumbent party. The effect, however, is almost negligible: we predict that the increase in 1% in the area affected by a fire of a district increases the share of votes towards the incumbent by 0.03%. Therefore, given these results we would expect that a *sección* where 10% of its area has been affected by a fire increases its vote share towards the incumbent by 0.6%.
+2. The political index value. Again, the effect is close to negligible: we expect that if a *sección* is affected by a fire, the aggregated ideology of the *sección* will be a bit more to the left (a decrease in 0.001 index points per each additional % of area affected by the fire).
+
+**B. Dummy of 20% threshold of the area affected as treatment variable**
+
+```{r TWFE combined dataset treatment variable B, warning = FALSE, message = FALSE}
+# First, we create a unique identifier for each election: 
+# the election year and the election number
+sf_combined <- sf_combined %>%
+  mutate(election_id = paste0(year_election, "_", election_number))
+
+# Convert the data frame to a panel data frame
+# Specify 'CUSEC' as the individual identifier and 'election_id' as the time identifier
+combined_panel <- pdata.frame(sf_combined, index = c("CUSEC", "election_id"))
+
+# We save the names of the different political outcomes in a vector
+dependent_vars <- c("turnout_rate", "blank_ballot_rate",
+  "incumbent_vote_proportion", "political_index_agg",
+  "nationalist_index_agg")
+
+# Initialize a list to store the models
+model_list_combined <- list()
+
+# Loop over each dependent variable
+for (dv in dependent_vars) {
+  # Define the formula dynamically
+  formula <- as.formula(paste(dv, "~ fire_20"))
+  
+  # Fit the fixed effects model
+  model <- plm(formula, data = combined_panel, model = "within", effect = "twoways")
+  
+  # Store the model in the list
+  model_list_combined[[dv]] <- model
+}
+
+# Initialize a list to store the robust summaries
+robust_summaries_combined <- list()
+
+for (dv in dependent_vars) {
+  model <- model_list_combined[[dv]]
+  
+  # Obtain the robust summary, with heteroskedasticity-robust and clustered 
+  # standard errors at the CUSEC level
+  robust_summary <- summary(model, vcov = 
+    function(x) vcovHC(x, method = "arellano", type = "HC1", cluster = "group"))
+  
+  # Store the robust summary in the list
+  robust_summaries_combined[[dv]] <- robust_summary
+}
+
+# Print an example of a long summary
+for (dv in dependent_vars[1]) {
+  cat("====================", "\n # Long Summary for Dependent Variable:", dv, "\n==================== \n")
+  print(robust_summaries_combined[[dv]])
+}
+
+for (dv in dependent_vars) {
+  cat("====================", "\n # Short Summary for Dependent Variable:", dv, "\n==================== \n")
+  print(robust_summaries_combined[[dv]][["coefficients"]])
+}
+```
+
+In contrast to the first specification, by considering the threshold dummy (at a threshold of 20%) we only observe a statistically significant effect of fire incidence in the aggregated political index. The direction of the impact, however, is still the same (though now larger in magnitude), so we expect *secciones* sufficiently affected by fires to vote more to parties in the left political spectrum. 
+
+**C. Dummy of 10% threshold of the area affected as treatment variable**
+
+```{r TWFE combined dataset treatment variable C, warning = FALSE, message = FALSE}
+# First, we create a unique identifier for each election: 
+# the election year and the election number
+sf_combined <- sf_combined %>%
+  mutate(election_id = paste0(year_election, "_", election_number))
+
+# Convert the data frame to a panel data frame
+# Specify 'CUSEC' as the individual identifier and 'election_id' as the time identifier
+combined_panel <- pdata.frame(sf_combined, index = c("CUSEC", "election_id"))
+
+# We save the names of the different political outcomes in a vector
+dependent_vars <- c("turnout_rate", "blank_ballot_rate",
+  "incumbent_vote_proportion", "political_index_agg",
+  "nationalist_index_agg")
+
+# Initialize a list to store the models
+model_list_combined <- list()
+
+# Loop over each dependent variable
+for (dv in dependent_vars) {
+  # Define the formula dynamically
+  formula <- as.formula(paste(dv, "~ fire_10"))
+  
+  # Fit the fixed effects model
+  model <- plm(formula, data = combined_panel, model = "within", effect = "twoways")
+  
+  # Store the model in the list
+  model_list_combined[[dv]] <- model
+}
+
+# Initialize a list to store the robust summaries
+robust_summaries_combined <- list()
+
+for (dv in dependent_vars) {
+  model <- model_list_combined[[dv]]
+  
+  # Obtain the robust summary, with heteroskedasticity-robust and clustered 
+  # standard errors at the CUSEC level
+  robust_summary <- summary(model, vcov = 
+    function(x) vcovHC(x, method = "arellano", type = "HC1", cluster = "group"))
+  
+  # Store the robust summary in the list
+  robust_summaries_combined[[dv]] <- robust_summary
+}
+
+# Print an example of a long summary
+for (dv in dependent_vars[1]) {
+  cat("====================", "\n # Long Summary for Dependent Variable:", dv, "\n==================== \n")
+  print(robust_summaries_combined[[dv]])
+}
+
+for (dv in dependent_vars) {
+  cat("====================", "\n # Short Summary for Dependent Variable:", dv, "\n==================== \n")
+  print(robust_summaries_combined[[dv]][["coefficients"]])
+}
+```
+
+The results are similar to the ones obtained in the previous specification, but in this case (maybe just because of a larger support of treated variables) we observe a positive effect of fire incidence on the incumbent vote share.
+
+**D. Dummy of 5% threshold of the area affected as treatment variable**
+
+```{r TWFE combined dataset treatment variable D, warning = FALSE, message = FALSE}
+# First, we create a unique identifier for each election: 
+# the election year and the election number
+sf_combined <- sf_combined %>%
+  mutate(election_id = paste0(year_election, "_", election_number))
+
+# Convert the data frame to a panel data frame
+# Specify 'CUSEC' as the individual identifier and 'election_id' as the time identifier
+combined_panel <- pdata.frame(sf_combined, index = c("CUSEC", "election_id"))
+
+# We save the names of the different political outcomes in a vector
+dependent_vars <- c("turnout_rate", "blank_ballot_rate",
+  "incumbent_vote_proportion", "political_index_agg",
+  "nationalist_index_agg")
+
+# Initialize a list to store the models
+model_list_combined <- list()
+
+# Loop over each dependent variable
+for (dv in dependent_vars) {
+  # Define the formula dynamically
+  formula <- as.formula(paste(dv, "~ fire_5"))
+  
+  # Fit the fixed effects model
+  model <- plm(formula, data = combined_panel, model = "within", effect = "twoways")
+  
+  # Store the model in the list
+  model_list_combined[[dv]] <- model
+}
+
+# Initialize a list to store the robust summaries
+robust_summaries_combined <- list()
+
+for (dv in dependent_vars) {
+  model <- model_list_combined[[dv]]
+  
+  # Obtain the robust summary, with heteroskedasticity-robust and clustered 
+  # standard errors at the CUSEC level
+  robust_summary <- summary(model, vcov = 
+    function(x) vcovHC(x, method = "arellano", type = "HC1", cluster = "group"))
+  
+  # Store the robust summary in the list
+  robust_summaries_combined[[dv]] <- robust_summary
+}
+
+# Print an example of a long summary
+for (dv in dependent_vars[1]) {
+  cat("====================", "\n # Long Summary for Dependent Variable:", dv, "\n==================== \n")
+  print(robust_summaries_combined[[dv]])
+}
+
+for (dv in dependent_vars) {
+  cat("====================", "\n # Short Summary for Dependent Variable:", dv, "\n==================== \n")
+  print(robust_summaries_combined[[dv]][["coefficients"]])
+}
+```
+
+Even when the threshold of fire incidence is as low as 5%, we still observe that treated areas tend to vote more progressive parties (than if they had not been affected).
+
+## $\color{darkblue}{\text{Interpretation of Regression Results}}$
+
+Based on the regression analyses conducted across different specifications and datasets, we can interpret the results as follows:
+
+**1) Fire Exposure and Political Ideology:**
+
+The most consistent finding across specifications is that areas affected by fires tend to shift slightly towards the left of the political spectrum. This effect, while statistically significant in some models, is relatively small in magnitude. For instance, in the combined dataset using fire-affected area as a continuous variable, we observed a decrease of 0.001 index points in the political ideology scale for each additional percentage of area affected by fire. This suggests that experiencing wildfires may lead voters to support more progressive policies, possibly related to environmental protection or climate change mitigation.
+
+**2) Support for Incumbent Parties:**
+
+There is some evidence, particularly in the combined dataset, that fire-affected areas show a slight increase in support for incumbent parties. However, this effect is small and not consistently significant across all specifications. When using the continuous measure of fire-affected area, we found that a 1% increase in affected area corresponded to a 0.03% increase in votes for the incumbent party. This could indicate a modest "rally around the flag" effect, where voters support existing leadership during times of crisis.
+
+**3) Voter Turnout and Blank Ballots:**
+
+Interestingly, we did not find consistent or significant effects of fire exposure on voter turnout or the rate of blank ballots cast. This suggests that while fires may influence the direction of votes, they do not substantially affect overall political engagement as measured by these metrics.
+
+**4) Nationalist Sentiment:**
+
+The impact of fires on support for nationalist parties was generally not significant, except for a weak effect in the Comunitat Valenciana dataset. This implies that exposure to wildfires does not strongly influence regional or nationalist sentiments among voters.
+
+**5) Threshold Effects:**
+
+When using binary treatment variables (e.g., 20%, 10%, or 5% of area affected), we observed similar directional effects as with the continuous measure, particularly for the political ideology index. This suggests that the impact of fires on voting behavior may not be strictly linear but could have threshold effects.
+
+## $\color{darkblue}{\text{Conclusions and Limitations}}$
+
+Our analysis of the impact of wildfires on electoral outcomes in Catalunya and the Comunitat Valenciana reveals several nuanced findings:
+
+- Subtle Shift in Political Ideology: The most robust finding is a small but detectable shift towards more left-leaning political preferences in areas affected by fires. This could reflect increased concern for environmental issues or support for more interventionist policies in disaster management.
+
+- Limited Impact on Incumbent Support: While there is some evidence of increased support for incumbent parties in fire-affected areas, this effect is modest and not consistently significant across all specifications.
+
+- Minimal Effect on Political Engagement: The lack of significant changes in voter turnout or blank ballot rates suggests that fire exposure does not dramatically alter overall levels of political participation.
+
+- Methodological Insights: The use of multiple treatment specifications (continuous and binary thresholds) and the combination of regional datasets provided a more comprehensive view of the effects, highlighting the importance of diverse analytical approaches in studying natural disasters' political impacts.
+
+- Context-Specific Effects: The differences in results between Catalunya and Comunitat Valenciana underscore the importance of regional context in understanding the political consequences of natural disasters.
+
+These findings contribute to the broader research on natural disasters and political behavior, suggesting that while wildfires and natural disasters in general do influence voting patterns, their effects are subtle and primarily manifest in ideological shifts rather than dramatic changes in political engagement or support for specific parties.
+
+*Limitations:*
+
+1. Geographical Measurement Error: The boundaries of "secciones censales" (census sections) slightly vary over time, particularly in urban areas. This could introduce some measurement error in our regressions. However, the impact is likely minimal since most boundary changes occur in cities where large fires are rare.
+2. Limited Disaster Scope: Our study focuses solely on wildfires, potentially limiting the generalizability of our findings to other types of natural disasters.
+3. Lack of Alternative Control Groups: We did not conduct robustness checks using different control groups, which could have strengthened our causal inference.
+4. Restricted Model Specifications: Our analysis employed a limited set of controls and regression specifications. We did not explore potentially relevant interaction effects or more complex model structures.
+5. Simplistic Political Index Construction: The political ideology indices were constructed using a somewhat manual approach. A more sophisticated method, such as applying textual analysis to political manifestos or accounting for ideological shifts of parties over time, could have provided more nuanced measures.
+
+Limitations of this project suggest directions of future research. Expanding the analysis to include other types of natural disasters, incorporating more sophisticated controls for local political and economic conditions, and exploring longer-term effects could provide a more comprehensive understanding of how environmental shocks shape political landscapes.
+
+In conclusion, while the immediate electoral impacts of wildfires appear modest, the consistent leftward shift in affected areas suggests that recurring environmental challenges could gradually reshape political attitudes and party preferences over time. This underscores the growing importance of environmental issues in shaping political discourse and voter behavior in regions vulnerable to climate-related disasters.
