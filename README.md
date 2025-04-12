@@ -11,8 +11,8 @@ This project blends spatial analysis with empirical techniques to uncover region
 The project was developed by:
 - Anastasiia Chernavskaia
 - Blanca Jimenez
-- Pablo Fernández
 - Nour Mohamed
+- Pablo Fernández
 
 ## 📁 Repository Structure
 
