@@ -1,4 +1,4 @@
-# 🚀 Final Project: Geospatial Data Science and Economic Spatial Models (BSE)
+# 🌍 Final Project: Geospatial Data Science and Economic Spatial Models (BSE)
 
 Welcome to the repository for the final project in Geospatial Data Science and Economic Spatial Models (subject from the BSE)! 
 
